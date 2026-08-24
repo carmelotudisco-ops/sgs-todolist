@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Plus, Check, Archive, Inbox, Trash2, LogOut, Loader2 } from "lucide-react";
+import { Plus, Check, Archive, Inbox, Trash2, LogOut, Loader2, Pencil, X, ChevronDown, Search } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import logoSgs from "./assets/logo-sgs.png";
 
@@ -29,6 +29,12 @@ function categoryOf(id) {
 function formatData(iso) {
   if (!iso) return "";
   return new Date(iso).toLocaleDateString("it-IT", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+// dalla email "mario.rossi@sgs.it" mostra solo "mario.rossi", per un'etichetta più discreta
+function shortName(email) {
+  if (!email) return "";
+  return email.split("@")[0];
 }
 
 const GLOBAL_STYLES = `
@@ -163,6 +169,10 @@ function TodoApp({ session }) {
   const [toast, setToast] = useState(null);
   const [stampingId, setStampingId] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [expandedIds, setExpandedIds] = useState(() => new Set());
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState({ title: "", description: "", category: "", urgency: "" });
+  const [search, setSearch] = useState("");
 
   const loadTasks = useCallback(async () => {
     const { data, error } = await supabase.from("tasks").select("*").order("created_at", { ascending: false });
@@ -202,6 +212,7 @@ function TodoApp({ session }) {
       category: catId,
       urgency,
       status: "attivo",
+      created_by: session.user.email,
     });
     setSaving(false);
     if (!error) {
@@ -232,8 +243,55 @@ function TodoApp({ session }) {
     if (!error) setToast(`Riportato tra i task da fare: "${task.title}"`);
   }
 
-  async function deleteTask(id) {
-    await supabase.from("tasks").delete().eq("id", id);
+  async function deleteTask(task) {
+    const ok = window.confirm(`Eliminare definitivamente "${task.title}"? L'azione non è reversibile.`);
+    if (!ok) return;
+    const { error } = await supabase.from("tasks").delete().eq("id", task.id);
+    if (!error) setToast(`Task eliminato: "${task.title}"`);
+  }
+
+  function startEdit(task) {
+    setEditingId(task.id);
+    setEditForm({
+      title: task.title,
+      description: task.description || "",
+      category: task.category,
+      urgency: task.urgency,
+    });
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+  }
+
+  async function saveEdit(task) {
+    const clean = editForm.title.trim();
+    if (!clean) return;
+    const { error } = await supabase
+      .from("tasks")
+      .update({
+        title: clean,
+        description: editForm.description.trim() || null,
+        category: editForm.category,
+        urgency: editForm.urgency,
+        edited_at: new Date().toISOString(),
+      })
+      .eq("id", task.id);
+    if (!error) {
+      setEditingId(null);
+      setToast(`Task modificato: "${clean}"`);
+    } else {
+      setToast("Errore nel salvataggio delle modifiche.");
+    }
+  }
+
+  function toggleExpand(id) {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   }
 
   async function handleLogout() {
@@ -242,6 +300,11 @@ function TodoApp({ session }) {
 
   const visible = tasks
     .filter((t) => (tab === "attivi" ? t.status === "attivo" : t.status === "archiviato"))
+    .filter((t) => {
+      if (!search.trim()) return true;
+      const q = search.trim().toLowerCase();
+      return t.title.toLowerCase().includes(q) || (t.description || "").toLowerCase().includes(q);
+    })
     .sort((a, b) => {
       const diff = (URGENCY[a.urgency]?.rank ?? 1) - (URGENCY[b.urgency]?.rank ?? 1);
       if (diff !== 0) return diff;
@@ -364,7 +427,7 @@ function TodoApp({ session }) {
 
                 <div className="flex-1">
                   <label className="block text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: "#6B6357" }}>
-                    Urgenza
+                    Priorità
                   </label>
                   <select
                     value={urgency}
@@ -395,6 +458,18 @@ function TodoApp({ session }) {
           </form>
         )}
 
+        <div className="relative mb-5">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "#9c9385" }} />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Cerca tra i task…"
+            className="w-full rounded-md border-2 pl-9 pr-3 py-2 bg-white text-[15px]"
+            style={{ borderColor: "#2B2822" }}
+          />
+        </div>
+
         {loadingTasks ? (
           <div className="flex justify-center py-16">
             <Loader2 className="animate-spin" size={24} style={{ color: "#6B6357" }} />
@@ -402,7 +477,11 @@ function TodoApp({ session }) {
         ) : visible.length === 0 ? (
           <div className="text-center py-16 rounded-lg border-2 border-dashed" style={{ borderColor: "#c9c3b6" }}>
             <p className="text-sm" style={{ color: "#6B6357" }}>
-              {tab === "attivi" ? "Nessun task da fare: aggiungine uno qui sopra." : "L'archivio è ancora vuoto."}
+              {search.trim()
+                ? "Nessun task corrisponde alla ricerca."
+                : tab === "attivi"
+                ? "Nessun task da fare: aggiungine uno qui sopra."
+                : "L'archivio è ancora vuoto."}
             </p>
           </div>
         ) : (
@@ -410,15 +489,102 @@ function TodoApp({ session }) {
             {visible.map((t) => {
               const u = URGENCY[t.urgency] || URGENCY.normale;
               const cat = categoryOf(t.category);
+              const isEditing = editingId === t.id;
+              const isExpanded = expandedIds.has(t.id);
+
+              if (isEditing) {
+                return (
+                  <li
+                    key={t.id}
+                    className="card-enter rounded-md border-2 bg-white p-4"
+                    style={{ borderColor: "#2B2822" }}
+                  >
+                    <div className="flex flex-col gap-2.5">
+                      <input
+                        type="text"
+                        value={editForm.title}
+                        onChange={(e) => setEditForm((f) => ({ ...f, title: e.target.value }))}
+                        className="w-full rounded-md border-2 px-3 py-2 text-[15px]"
+                        style={{ borderColor: "#2B2822" }}
+                        placeholder="Titolo"
+                      />
+                      <textarea
+                        value={editForm.description}
+                        onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))}
+                        rows={2}
+                        className="w-full rounded-md border-2 px-3 py-2 text-sm resize-none"
+                        style={{ borderColor: "#2B2822" }}
+                        placeholder="Descrizione"
+                      />
+                      <div className="flex flex-col sm:flex-row gap-2.5">
+                        <div className="flex-1">
+                          <label className="block text-[11px] font-semibold uppercase tracking-wide mb-1" style={{ color: "#6B6357" }}>
+                            Categoria
+                          </label>
+                          <select
+                            value={editForm.category}
+                            onChange={(e) => setEditForm((f) => ({ ...f, category: e.target.value }))}
+                            className="w-full rounded-md border-2 px-3 py-2 text-sm"
+                            style={{ borderColor: "#2B2822" }}
+                          >
+                            {CATEGORIES.map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {c.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="flex-1">
+                          <label className="block text-[11px] font-semibold uppercase tracking-wide mb-1" style={{ color: "#6B6357" }}>
+                            Priorità
+                          </label>
+                          <select
+                            value={editForm.urgency}
+                            onChange={(e) => setEditForm((f) => ({ ...f, urgency: e.target.value }))}
+                            className="w-full rounded-md border-2 px-3 py-2 text-sm font-medium"
+                            style={{ borderColor: URGENCY[editForm.urgency]?.color || "#2B2822" }}
+                          >
+                            {Object.entries(URGENCY).map(([key, uu]) => (
+                              <option key={key} value={key}>
+                                {uu.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                      <div className="flex justify-end gap-2 mt-1">
+                        <button
+                          onClick={cancelEdit}
+                          className="flex items-center gap-1 rounded-md px-3 py-1.5 text-xs font-semibold"
+                          style={{ color: "#6B6357" }}
+                        >
+                          <X size={14} /> Annulla
+                        </button>
+                        <button
+                          onClick={() => saveEdit(t)}
+                          className="flex items-center gap-1 rounded-md px-3 py-1.5 text-xs font-semibold text-white"
+                          style={{ background: "#2B2822" }}
+                        >
+                          <Check size={14} /> Salva
+                        </button>
+                      </div>
+                    </div>
+                  </li>
+                );
+              }
+
               return (
                 <li
                   key={t.id}
                   className="card-enter relative flex items-center justify-between gap-3 rounded-md border-2 bg-white pl-3 pr-4 py-3 overflow-hidden"
                   style={{ borderColor: "#2B2822", borderLeft: `6px solid ${u.color}` }}
                 >
-                  <div className="min-w-0">
+                  <div className="min-w-0 flex-1 cursor-pointer" onClick={() => toggleExpand(t.id)}>
                     <div className="flex items-center gap-2 flex-wrap">
-                      <p className="text-[15px] font-medium truncate" style={{ color: "#2B2822" }}>
+                      <p
+                        className={`text-[15px] font-medium ${isExpanded ? "whitespace-normal break-words" : "truncate"}`}
+                        style={{ color: "#2B2822" }}
+                      >
                         {t.title}
                       </p>
                       <span
@@ -433,25 +599,65 @@ function TodoApp({ session }) {
                       >
                         {cat.name}
                       </span>
+                      {(t.description) && (
+                        <ChevronDown
+                          size={13}
+                          className="shrink-0 transition-transform"
+                          style={{ color: "#9c9385", transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)" }}
+                        />
+                      )}
                     </div>
                     {t.description && (
-                      <p className="text-sm mt-0.5 truncate" style={{ color: "#4A453C" }}>
+                      <p
+                        className={`text-sm mt-0.5 ${isExpanded ? "whitespace-normal break-words" : "truncate"}`}
+                        style={{ color: "#4A453C" }}
+                      >
                         {t.description}
                       </p>
                     )}
-                    <p className="text-xs mt-0.5" style={{ fontFamily: "'JetBrains Mono', monospace", color: "#9c9385" }}>
-                      {tab === "attivi" ? `creato il ${formatData(t.created_at)}` : `completato il ${formatData(t.completed_at)}`}
-                    </p>
+                    <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                      <p className="text-xs" style={{ fontFamily: "'JetBrains Mono', monospace", color: "#9c9385" }}>
+                        {tab === "attivi" ? `creato il ${formatData(t.created_at)}` : `completato il ${formatData(t.completed_at)}`}
+                      </p>
+                      {t.edited_at && (
+                        <p className="text-xs" style={{ fontFamily: "'JetBrains Mono', monospace", color: "#9c9385" }}>
+                          · modificato il {formatData(t.edited_at)}
+                        </p>
+                      )}
+                      {t.created_by && (
+                        <p className="text-xs" style={{ color: "#b7b0a2" }}>
+                          · {shortName(t.created_by)}
+                        </p>
+                      )}
+                    </div>
                   </div>
 
                   {tab === "attivi" ? (
-                    <button
-                      onClick={() => completeTask(t)}
-                      className="shrink-0 flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90"
-                      style={{ background: cat.color }}
-                    >
-                      <Check size={14} /> Fatto
-                    </button>
+                    <div className="shrink-0 flex items-center gap-1.5">
+                      <button
+                        onClick={() => startEdit(t)}
+                        title="Modifica"
+                        className="p-1.5 rounded-md hover:bg-black/5"
+                        style={{ color: "#6B6357" }}
+                      >
+                        <Pencil size={15} />
+                      </button>
+                      <button
+                        onClick={() => deleteTask(t)}
+                        title="Elimina"
+                        className="p-1.5 rounded-md hover:bg-black/5"
+                        style={{ color: "#A63D40" }}
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                      <button
+                        onClick={() => completeTask(t)}
+                        className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90"
+                        style={{ background: cat.color }}
+                      >
+                        <Check size={14} /> Fatto
+                      </button>
+                    </div>
                   ) : (
                     <div className="shrink-0 flex items-center gap-2">
                       <button
@@ -462,7 +668,7 @@ function TodoApp({ session }) {
                         riattiva
                       </button>
                       <button
-                        onClick={() => deleteTask(t.id)}
+                        onClick={() => deleteTask(t)}
                         className="p-1.5 rounded-md hover:bg-black/5"
                         style={{ color: "#A63D40" }}
                       >
