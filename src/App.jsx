@@ -614,7 +614,7 @@ function TodoApp({ session }) {
                     </div>
                     {t.description && (
                       <p
-                        className={`text-sm mt-0.5 ${isExpanded ? "whitespace-normal break-words" : "truncate"}`}
+                        className={`text-sm mt-0.5 ${isExpanded ? "whitespace-pre-line break-words" : "truncate"}`}
                         style={{ color: "#4A453C" }}
                       >
                         {t.description}
