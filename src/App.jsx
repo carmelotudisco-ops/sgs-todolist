@@ -587,6 +587,11 @@ function TodoApp({ session }) {
                       >
                         {t.title}
                       </p>
+                      {t.created_by && (
+                        <span className="shrink-0 text-xs font-medium" style={{ color: "#8A5A44" }}>
+                          — {shortName(t.created_by)}
+                        </span>
+                      )}
                       <span
                         className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white"
                         style={{ background: u.color }}
@@ -622,11 +627,6 @@ function TodoApp({ session }) {
                       {t.edited_at && (
                         <p className="text-xs" style={{ fontFamily: "'JetBrains Mono', monospace", color: "#9c9385" }}>
                           · modificato il {formatData(t.edited_at)}
-                        </p>
-                      )}
-                      {t.created_by && (
-                        <p className="text-xs" style={{ color: "#b7b0a2" }}>
-                          · {shortName(t.created_by)}
                         </p>
                       )}
                     </div>
